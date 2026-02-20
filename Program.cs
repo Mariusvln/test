@@ -1,171 +1,139 @@
 ﻿using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.Common;
-using OpenTK.Windowing.GraphicsLibraryFramework;
 using OpenTK.Mathematics;
 using OpenTK.Graphics.OpenGL4;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using My3DEngine;
 
-class Program : GameWindow
+class Program
 {
-    private Shader shader = null!;
-    private Camera camera;
-    private Vector2 lastMousePos;
-    private bool firstMouse = true;
-    private float deltaTime;
-
-    private List<ModelInstance> sceneModels = new();
-    private int currentModelIndex = 0;
-
-    public Program()
-        : base(GameWindowSettings.Default,
-               new NativeWindowSettings() { ClientSize = new Vector2i(800, 600), Title = "3D Scene" })
+    static void Main()
     {
-        camera = new Camera(new Vector3(0, 0, 5));
-        CursorState = CursorState.Grabbed;
+        var nativeSettings = new NativeWindowSettings()
+        {
+            Size = new Vector2i(800, 600),
+            Title = "Simple 3D Renderer v3"
+        };
+
+        using var window = new Game(nativeSettings);
+        window.Run();
     }
+}
+
+class Game : GameWindow
+{
+    private int _vao, _vbo, _ebo;
+    private Shader _shader = null!;
+    private Camera _camera = null!;
+
+    private float _rotation = 0f;
+    private Vector2 _lastMouse;
+    private bool _firstMove = true;
+
+    private readonly float[] _vertices =
+    {
+        // positions        // normals
+        -0.5f,-0.5f,-0.5f,  0f,0f,-1f,
+         0.5f,-0.5f,-0.5f,  0f,0f,-1f,
+         0.5f, 0.5f,-0.5f,  0f,0f,-1f,
+        -0.5f, 0.5f,-0.5f,  0f,0f,-1f,
+        -0.5f,-0.5f, 0.5f,  0f,0f,1f,
+         0.5f,-0.5f, 0.5f,  0f,0f,1f,
+         0.5f, 0.5f, 0.5f,  0f,0f,1f,
+        -0.5f, 0.5f, 0.5f,  0f,0f,1f
+    };
+
+    private readonly uint[] _indices =
+    {
+        0,1,2,2,3,0,
+        4,5,6,6,7,4,
+        0,1,5,5,4,0,
+        2,3,7,7,6,2,
+        0,3,7,7,4,0,
+        1,2,6,6,5,1
+    };
+
+    public Game(NativeWindowSettings settings) : base(GameWindowSettings.Default, settings) { }
 
     protected override void OnLoad()
     {
+        base.OnLoad();
+        GL.ClearColor(0.2f, 0.3f, 0.3f, 1f);
         GL.Enable(EnableCap.DepthTest);
 
-        shader = new Shader("shader.vert", "shader.frag");
+        // VAO / VBO / EBO
+        _vao = GL.GenVertexArray();
+        _vbo = GL.GenBuffer();
+        _ebo = GL.GenBuffer();
 
-        // Load models from Assets folder
-        string assetsPath = "Assets";
-        if (!Directory.Exists(assetsPath))
-        {
-            Console.WriteLine("Assets folder not found! Create 'Assets' folder with subfolders for each model.");
-            Close();
-            return;
-        }
+        GL.BindVertexArray(_vao);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, _vertices.Length * sizeof(float), _vertices, BufferUsageHint.StaticDraw);
 
-        var modelFolders = Directory.GetDirectories(assetsPath);
-        if (modelFolders.Length == 0)
-        {
-            Console.WriteLine("No model folders found in Assets!");
-            Close();
-            return;
-        }
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
+        GL.BufferData(BufferTarget.ElementArrayBuffer, _indices.Length * sizeof(uint), _indices, BufferUsageHint.StaticDraw);
 
-        int gridX = 0;
-        int gridZ = 0;
-        int spacing = 3;
+        // vertex positions
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), 0);
+        GL.EnableVertexAttribArray(0);
+        // vertex normals
+        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), 3 * sizeof(float));
+        GL.EnableVertexAttribArray(1);
 
-        foreach (var folder in modelFolders)
-        {
-            string[] objFiles = Directory.GetFiles(folder, "*.obj");
-            if (objFiles.Length == 0) continue;
+        // Shader
+        _shader = new Shader("shader.vert", "shader.frag");
+        _shader.Use();
 
-            string objFile = objFiles[0];
-            string texFile = Directory.GetFiles(folder, "*.jpg").Length > 0 ?
-                             Directory.GetFiles(folder, "*.jpg")[0] :
-                             Directory.GetFiles(folder, "*.png").Length > 0 ?
-                             Directory.GetFiles(folder, "*.png")[0] : "";
+        // Camera
+        _camera = new Camera(new Vector3(0f, 0f, 3f), Size.X / (float)Size.Y);
 
-            Model m = new Model(objFile, texFile);
-            Vector3 pos = new Vector3(gridX * spacing, 0, gridZ * spacing);
-            sceneModels.Add(new ModelInstance(m, pos, Vector3.Zero, Vector3.One));
-
-            gridX++;
-            if (gridX > 4) { gridX = 0; gridZ++; }
-        }
-
-        if (sceneModels.Count == 0)
-        {
-            Console.WriteLine("No valid models found in Assets!");
-            Close();
-            return;
-        }
-
-        currentModelIndex = 0;
-
-        // Drag & drop support
-        this.FileDrop += (e) =>
-        {
-            foreach (var file in e.FileNames)
-            {
-                string ext = Path.GetExtension(file).ToLower();
-                if (ext == ".obj")
-                {
-                    string folder = Path.GetDirectoryName(file)!;
-                    string texFile = Directory.GetFiles(folder, "*.jpg").Length > 0 ?
-                                     Directory.GetFiles(folder, "*.jpg")[0] :
-                                     Directory.GetFiles(folder, "*.png").Length > 0 ?
-                                     Directory.GetFiles(folder, "*.png")[0] : "";
-
-                    Model m = new Model(file, texFile);
-                    sceneModels.Add(new ModelInstance(m,
-                        new Vector3(sceneModels.Count * spacing, 0, 0), Vector3.Zero, Vector3.One));
-                }
-            }
-        };
+        CursorState = CursorState.Grabbed;
     }
 
     protected override void OnUpdateFrame(FrameEventArgs args)
     {
-        deltaTime = (float)args.Time;
+        base.OnUpdateFrame(args);
+        if (!IsFocused) return;
 
-        if (KeyboardState.IsKeyDown(Keys.Escape)) Close();
+        var input = KeyboardState;
+        const float speed = 2.5f;
+        if (input.IsKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.W)) _camera.Position += _camera.Front * speed * (float)args.Time;
+        if (input.IsKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.S)) _camera.Position -= _camera.Front * speed * (float)args.Time;
+        if (input.IsKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.A)) _camera.Position -= _camera.Right * speed * (float)args.Time;
+        if (input.IsKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.D)) _camera.Position += _camera.Right * speed * (float)args.Time;
 
-        camera.ProcessKeyboard(KeyboardState, deltaTime);
+        // Mouse movement
+        var mouse = MouseState.Position;
+        if (_firstMove) { _lastMouse = mouse; _firstMove = false; }
+        var delta = mouse - _lastMouse;
+        _lastMouse = mouse;
 
-        Vector2 mousePos = MouseState.Position;
-        if (firstMouse)
-        {
-            lastMousePos = mousePos;
-            firstMouse = false;
-        }
-        float xoffset = mousePos.X - lastMousePos.X;
-        float yoffset = mousePos.Y - lastMousePos.Y;
-        lastMousePos = mousePos;
-        camera.ProcessMouse(xoffset, yoffset);
+        _camera.Yaw += delta.X * 0.1f;
+        _camera.Pitch -= delta.Y * 0.1f;
 
-        if (sceneModels.Count > 0)
-        {
-            // Rotate current model
-            if (KeyboardState.IsKeyPressed(Keys.Tab))
-                currentModelIndex = (currentModelIndex + 1) % sceneModels.Count;
-
-            sceneModels[currentModelIndex].rotation.Y += 30f * deltaTime;
-        }
+        _rotation += 50f * (float)args.Time;
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
     {
+        base.OnRenderFrame(args);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-        shader.Use();
+        _shader.Use();
 
-        Matrix4 view = camera.GetViewMatrix();
-        Matrix4 proj = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(45f),
-            Size.X / (float)Size.Y, 0.1f, 100f);
+        Matrix4 model = Matrix4.CreateRotationY(MathHelper.DegreesToRadians(_rotation));
+        Matrix4 view = _camera.GetViewMatrix();
+        Matrix4 proj = _camera.GetProjectionMatrix();
 
-        GL.UniformMatrix4(GL.GetUniformLocation(shader.Handle, "view"), false, ref view);
-        GL.UniformMatrix4(GL.GetUniformLocation(shader.Handle, "projection"), false, ref proj);
-        GL.Uniform3(GL.GetUniformLocation(shader.Handle, "lightPos"), new Vector3(2, 5, 2));
-        GL.Uniform3(GL.GetUniformLocation(shader.Handle, "viewPos"), camera.Position);
+        _shader.SetMatrix4("model", model);
+        _shader.SetMatrix4("view", view);
+        _shader.SetMatrix4("projection", proj);
 
-        foreach (var instance in sceneModels)
-        {
-            Matrix4 modelMat = Matrix4.CreateScale(instance.scale) *
-                               Matrix4.CreateRotationX(MathHelper.DegreesToRadians(instance.rotation.X)) *
-                               Matrix4.CreateRotationY(MathHelper.DegreesToRadians(instance.rotation.Y)) *
-                               Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(instance.rotation.Z)) *
-                               Matrix4.CreateTranslation(instance.position);
+        _shader.SetVector3("lightPos", new Vector3(1.2f, 1f, 2f));
+        _shader.SetVector3("viewPos", _camera.Position);
+        _shader.SetVector3("lightColor", new Vector3(1f, 1f, 1f));
 
-            GL.UniformMatrix4(GL.GetUniformLocation(shader.Handle, "model"), false, ref modelMat);
-            instance.model.Draw();
-        }
+        GL.BindVertexArray(_vao);
+        GL.DrawElements(PrimitiveType.Triangles, _indices.Length, DrawElementsType.UnsignedInt, 0);
 
         SwapBuffers();
-    }
-
-    static void Main()
-    {
-        using var game = new Program();
-        game.Run();
     }
 }

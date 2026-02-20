@@ -1,60 +1,50 @@
 using OpenTK.Graphics.OpenGL4;
-using System;
+using OpenTK.Mathematics;
 using System.IO;
 
-namespace My3DEngine
+class Shader
 {
-    public class Shader
+    public int Handle;
+
+    public Shader(string vertexPath, string fragmentPath)
     {
-        public int Handle;
+        string vertexSource = File.ReadAllText(vertexPath);
+        string fragmentSource = File.ReadAllText(fragmentPath);
 
-        public Shader(string vertexPath, string fragmentPath)
-        {
-            // Load shader source
-            string vertexSource = File.ReadAllText(vertexPath);
-            string fragmentSource = File.ReadAllText(fragmentPath);
+        int vertex = GL.CreateShader(ShaderType.VertexShader);
+        GL.ShaderSource(vertex, vertexSource);
+        GL.CompileShader(vertex);
+        GL.GetShader(vertex, ShaderParameter.CompileStatus, out int success);
+        if (success == 0) throw new Exception(GL.GetShaderInfoLog(vertex));
 
-            // Compile shaders
-            int vertex = GL.CreateShader(ShaderType.VertexShader);
-            GL.ShaderSource(vertex, vertexSource);
-            GL.CompileShader(vertex);
-            CheckShaderCompile(vertex, vertexPath);
+        int fragment = GL.CreateShader(ShaderType.FragmentShader);
+        GL.ShaderSource(fragment, fragmentSource);
+        GL.CompileShader(fragment);
+        GL.GetShader(fragment, ShaderParameter.CompileStatus, out success);
+        if (success == 0) throw new Exception(GL.GetShaderInfoLog(fragment));
 
-            int fragment = GL.CreateShader(ShaderType.FragmentShader);
-            GL.ShaderSource(fragment, fragmentSource);
-            GL.CompileShader(fragment);
-            CheckShaderCompile(fragment, fragmentPath);
+        Handle = GL.CreateProgram();
+        GL.AttachShader(Handle, vertex);
+        GL.AttachShader(Handle, fragment);
+        GL.LinkProgram(Handle);
+        GL.GetProgram(Handle, GetProgramParameterName.LinkStatus, out success);
+        if (success == 0) throw new Exception(GL.GetProgramInfoLog(Handle));
 
-            // Link program
-            Handle = GL.CreateProgram();
-            GL.AttachShader(Handle, vertex);
-            GL.AttachShader(Handle, fragment);
-            GL.LinkProgram(Handle);
+        GL.DeleteShader(vertex);
+        GL.DeleteShader(fragment);
+    }
 
-            GL.GetProgram(Handle, GetProgramParameterName.LinkStatus, out int success);
-            if (success == 0)
-            {
-                string info = GL.GetProgramInfoLog(Handle);
-                throw new Exception($"Error linking shader program: {info}");
-            }
+    public void Use() => GL.UseProgram(Handle);
 
-            // Cleanup
-            GL.DetachShader(Handle, vertex);
-            GL.DetachShader(Handle, fragment);
-            GL.DeleteShader(vertex);
-            GL.DeleteShader(fragment);
-        }
+    public void SetMatrix4(string name, Matrix4 mat)
+    {
+        int loc = GL.GetUniformLocation(Handle, name);
+        GL.UniformMatrix4(loc, false, ref mat);
+    }
 
-        public void Use() => GL.UseProgram(Handle);
-
-        private void CheckShaderCompile(int shader, string path)
-        {
-            GL.GetShader(shader, ShaderParameter.CompileStatus, out int success);
-            if (success == 0)
-            {
-                string info = GL.GetShaderInfoLog(shader);
-                throw new Exception($"Error compiling shader ({path}): {info}");
-            }
-        }
+    public void SetVector3(string name, Vector3 vec)
+    {
+        int loc = GL.GetUniformLocation(Handle, name);
+        GL.Uniform3(loc, vec);
     }
 }
